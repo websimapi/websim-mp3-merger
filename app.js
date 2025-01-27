@@ -51,10 +51,13 @@ class MP3Merger {
     const progressFill = progressBar.querySelector('.progress-fill');
     const loadingOverlay = document.getElementById('loadingOverlay');
     const statusText = document.getElementById('statusText');
+    const overlayProgressFill = loadingOverlay.querySelector('.progress-fill');
     
     try {
       loadingOverlay.style.display = 'flex';
       progressBar.style.display = 'block';
+      progressFill.style.width = '0%';
+      overlayProgressFill.style.width = '0%';
       
       statusText.textContent = 'Reading files...';
       // Process files in chunks to prevent memory issues
@@ -70,24 +73,35 @@ class MP3Merger {
         audioBuffers.push(...chunkBuffers);
         processedFiles += chunk.length;
         
-        // Update progress
+        // Update both progress bars
         const readProgress = processedFiles / this.files.length;
-        progressFill.style.width = `${readProgress * 50}%`; // First 50% for reading
+        const progressPercent = readProgress * 33; // First third for reading
+        progressFill.style.width = `${progressPercent}%`;
+        overlayProgressFill.style.width = `${progressPercent}%`;
         
-        // Allow UI to update
         await new Promise(resolve => setTimeout(resolve, 0));
       }
 
       statusText.textContent = 'Processing audio...';
       // Merge the audio data
       const mergedBlob = await this.mergeAudioBuffers(audioBuffers, (progress) => {
-        // Second 50% for processing
-        progressFill.style.width = `${50 + (progress * 50)}%`;
+        // Second third for processing
+        const progressPercent = 33 + (progress * 33);
+        progressFill.style.width = `${progressPercent}%`;
+        overlayProgressFill.style.width = `${progressPercent}%`;
+      });
+
+      statusText.textContent = 'Converting to MP3...';
+      const finalMp3 = await this.convertToMP3Chunked(mergedBlob, (progress) => {
+        // Final third for MP3 conversion
+        const progressPercent = 66 + (progress * 34);
+        progressFill.style.width = `${progressPercent}%`;
+        overlayProgressFill.style.width = `${progressPercent}%`;
       });
 
       statusText.textContent = 'Preparing download...';
       // Create download link
-      const url = URL.createObjectURL(mergedBlob);
+      const url = URL.createObjectURL(finalMp3);
       const a = document.createElement('a');
       a.href = url;
       a.download = 'merged.mp3';
@@ -99,12 +113,14 @@ class MP3Merger {
       loadingOverlay.style.display = 'none';
       progressBar.style.display = 'none';
       progressFill.style.width = '0%';
+      overlayProgressFill.style.width = '0%';
     } catch (error) {
       console.error('Error merging files:', error);
       alert('Error merging files. Please try again.');
       loadingOverlay.style.display = 'none';
       progressBar.style.display = 'none';
       progressFill.style.width = '0%';
+      overlayProgressFill.style.width = '0%';
     }
   }
 
@@ -167,7 +183,7 @@ class MP3Merger {
     return await this.convertToMP3Chunked(mergedBuffer);
   }
 
-  async convertToMP3Chunked(audioBuffer) {
+  async convertToMP3Chunked(audioBuffer, progressCallback) {
     const mp3Encoder = new lamejs.Mp3Encoder(
       audioBuffer.numberOfChannels,
       audioBuffer.sampleRate,
@@ -182,6 +198,8 @@ class MP3Merger {
     const mp3Data = [];
     const sampleBlockSize = 1152;
     const CHUNKS_PER_ITERATION = 100;
+    const totalChunks = Math.ceil(channels[0].length / (sampleBlockSize * CHUNKS_PER_ITERATION));
+    let processedChunks = 0;
     
     for (let i = 0; i < channels[0].length; i += sampleBlockSize * CHUNKS_PER_ITERATION) {
       const endIndex = Math.min(i + sampleBlockSize * CHUNKS_PER_ITERATION, channels[0].length);
@@ -198,6 +216,9 @@ class MP3Merger {
           mp3Data.push(mp3buf);
         }
       }
+      
+      processedChunks++;
+      progressCallback(processedChunks / totalChunks);
       
       // Allow UI to update periodically
       await new Promise(resolve => setTimeout(resolve, 0));

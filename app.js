@@ -60,47 +60,62 @@ class MP3Merger {
       overlayProgressFill.style.width = '0%';
       
       statusText.textContent = 'Reading files...';
+      console.log('Starting file reading process...');
+      
       // Process files in chunks to prevent memory issues
-      const CHUNK_SIZE = 5;
+      const CHUNK_SIZE = 3; // Reduced chunk size for better stability
       let processedFiles = 0;
       let audioBuffers = [];
       
       for (let i = 0; i < this.files.length; i += CHUNK_SIZE) {
         const chunk = this.files.slice(i, i + CHUNK_SIZE);
+        console.log(`Processing chunk ${i/CHUNK_SIZE + 1} of ${Math.ceil(this.files.length/CHUNK_SIZE)}`);
+        
         const chunkBuffers = await Promise.all(
-          chunk.map(file => this.readFileAsArrayBuffer(file))
+          chunk.map(async file => {
+            try {
+              const buffer = await this.readFileAsArrayBuffer(file);
+              console.log(`Successfully read file: ${file.name}`);
+              return buffer;
+            } catch (error) {
+              console.error(`Error reading file ${file.name}:`, error);
+              throw new Error(`Failed to read file ${file.name}: ${error.message}`);
+            }
+          })
         );
+        
         audioBuffers.push(...chunkBuffers);
         processedFiles += chunk.length;
         
-        // Update both progress bars
         const readProgress = processedFiles / this.files.length;
-        const progressPercent = readProgress * 33; // First third for reading
+        const progressPercent = readProgress * 33;
         progressFill.style.width = `${progressPercent}%`;
         overlayProgressFill.style.width = `${progressPercent}%`;
         
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await new Promise(resolve => setTimeout(resolve, 100)); // Increased delay for stability
       }
 
       statusText.textContent = 'Processing audio...';
-      // Merge the audio data
+      console.log('Starting audio processing...');
+      
       const mergedBlob = await this.mergeAudioBuffers(audioBuffers, (progress) => {
-        // Second third for processing
         const progressPercent = 33 + (progress * 33);
         progressFill.style.width = `${progressPercent}%`;
         overlayProgressFill.style.width = `${progressPercent}%`;
       });
 
       statusText.textContent = 'Converting to MP3...';
+      console.log('Starting MP3 conversion...');
+      
       const finalMp3 = await this.convertToMP3Chunked(mergedBlob, (progress) => {
-        // Final third for MP3 conversion
         const progressPercent = 66 + (progress * 34);
         progressFill.style.width = `${progressPercent}%`;
         overlayProgressFill.style.width = `${progressPercent}%`;
       });
 
       statusText.textContent = 'Preparing download...';
-      // Create download link
+      console.log('Creating download link...');
+      
       const url = URL.createObjectURL(finalMp3);
       const a = document.createElement('a');
       a.href = url;
@@ -110,77 +125,97 @@ class MP3Merger {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
+      console.log('Process completed successfully');
       loadingOverlay.style.display = 'none';
       progressBar.style.display = 'none';
       progressFill.style.width = '0%';
       overlayProgressFill.style.width = '0%';
     } catch (error) {
-      console.error('Error merging files:', error);
-      alert('Error merging files. Please try again.');
+      console.error('Detailed error in merging process:', error);
+      statusText.textContent = `Error: ${error.message}`;
+      await new Promise(resolve => setTimeout(resolve, 3000)); // Show error message for 3 seconds
       loadingOverlay.style.display = 'none';
       progressBar.style.display = 'none';
       progressFill.style.width = '0%';
       overlayProgressFill.style.width = '0%';
+      alert(`Error merging files: ${error.message}\nPlease check console for details.`);
     }
   }
 
   async mergeAudioBuffers(audioBuffers, progressCallback) {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    
-    // Decode audio data in chunks
-    const DECODE_CHUNK_SIZE = 3;
-    let decodedBuffers = [];
-    
-    for (let i = 0; i < audioBuffers.length; i += DECODE_CHUNK_SIZE) {
-      const chunk = audioBuffers.slice(i, i + DECODE_CHUNK_SIZE);
-      const decodedChunk = await Promise.all(
-        chunk.map(buffer => audioContext.decodeAudioData(buffer))
-      );
-      decodedBuffers.push(...decodedChunk);
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      console.log('Created AudioContext');
       
-      // Allow UI to update
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
-
-    // Calculate total length
-    const totalLength = decodedBuffers.reduce((acc, buffer) => acc + buffer.length, 0);
-    
-    // Create merged buffer
-    const mergedBuffer = audioContext.createBuffer(
-      decodedBuffers[0].numberOfChannels,
-      totalLength,
-      decodedBuffers[0].sampleRate
-    );
-
-    let offset = 0;
-    const MERGE_CHUNK_SIZE = 100000; // Process 100k samples at a time
-
-    for (let i = 0; i < decodedBuffers.length; i++) {
-      const buffer = decodedBuffers[i];
-      for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
-        const mergedChannelData = mergedBuffer.getChannelData(channel);
-        const bufferChannelData = buffer.getChannelData(channel);
+      // Decode audio data in smaller chunks
+      const DECODE_CHUNK_SIZE = 2; // Reduced for stability
+      let decodedBuffers = [];
+      
+      for (let i = 0; i < audioBuffers.length; i += DECODE_CHUNK_SIZE) {
+        const chunk = audioBuffers.slice(i, i + DECODE_CHUNK_SIZE);
+        console.log(`Decoding chunk ${i/DECODE_CHUNK_SIZE + 1} of ${Math.ceil(audioBuffers.length/DECODE_CHUNK_SIZE)}`);
         
-        // Copy data in chunks
-        for (let j = 0; j < bufferChannelData.length; j += MERGE_CHUNK_SIZE) {
-          const chunk = bufferChannelData.subarray(
-            j,
-            Math.min(j + MERGE_CHUNK_SIZE, bufferChannelData.length)
-          );
-          mergedChannelData.set(chunk, offset + j);
+        const decodedChunk = await Promise.all(
+          chunk.map(async buffer => {
+            try {
+              return await audioContext.decodeAudioData(buffer.slice(0));
+            } catch (error) {
+              console.error('Error decoding audio data:', error);
+              throw new Error('Failed to decode audio data. File might be corrupted.');
+            }
+          })
+        );
+        
+        decodedBuffers.push(...decodedChunk);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      console.log('All audio buffers decoded successfully');
+      
+      // Calculate total length
+      const totalLength = decodedBuffers.reduce((acc, buffer) => acc + buffer.length, 0);
+      console.log(`Total merged length will be: ${totalLength} samples`);
+      
+      // Create merged buffer
+      const mergedBuffer = audioContext.createBuffer(
+        decodedBuffers[0].numberOfChannels,
+        totalLength,
+        decodedBuffers[0].sampleRate
+      );
+
+      let offset = 0;
+      const MERGE_CHUNK_SIZE = 50000; // Reduced for stability
+
+      for (let i = 0; i < decodedBuffers.length; i++) {
+        const buffer = decodedBuffers[i];
+        console.log(`Merging buffer ${i + 1} of ${decodedBuffers.length}`);
+        
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+          const mergedChannelData = mergedBuffer.getChannelData(channel);
+          const bufferChannelData = buffer.getChannelData(channel);
           
-          // Allow UI to update every few chunks
-          if (j % (MERGE_CHUNK_SIZE * 5) === 0) {
-            await new Promise(resolve => setTimeout(resolve, 0));
+          for (let j = 0; j < bufferChannelData.length; j += MERGE_CHUNK_SIZE) {
+            const chunk = bufferChannelData.subarray(
+              j,
+              Math.min(j + MERGE_CHUNK_SIZE, bufferChannelData.length)
+            );
+            mergedChannelData.set(chunk, offset + j);
+            
+            if (j % (MERGE_CHUNK_SIZE * 5) === 0) {
+              await new Promise(resolve => setTimeout(resolve, 1));
+            }
           }
         }
+        offset += buffer.length;
+        progressCallback((i + 1) / decodedBuffers.length);
       }
-      offset += buffer.length;
-      progressCallback((i + 1) / decodedBuffers.length);
-    }
 
-    // Convert to MP3 with chunked processing
-    return await this.convertToMP3Chunked(mergedBuffer);
+      console.log('Audio merging completed successfully');
+      return mergedBuffer;
+    } catch (error) {
+      console.error('Error in mergeAudioBuffers:', error);
+      throw error;
+    }
   }
 
   async convertToMP3Chunked(audioBuffer, progressCallback) {
